@@ -1,0 +1,12 @@
+data/*
+!data/README.md
+!data/.gitkeep
+
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# extraction output
+*.csv
+!tests/**/*.csv

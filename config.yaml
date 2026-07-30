@@ -1,0 +1,42 @@
+# Thresholds and knobs for feature extraction.
+# Nothing in src/features/*.py should hardcode a magic number that lives here.
+
+tier1:
+  keys:
+    # keydown events with data.repeat == true are OS key-repeat, not new keystrokes.
+    # Excluded from inter-key-interval / burst / revision counting so a held-down
+    # key doesn't masquerade as a fast typing burst.
+    exclude_repeats: true
+    # Keys that count as a "deletion" keystroke.
+    deletion_keys: ["Backspace", "Delete"]
+    # Keys that count as an "insertion" keystroke (in addition to any single
+    # printable character, which always counts as an insertion).
+    insertion_special_keys: ["Enter", "Tab"]
+  pause:
+    # A gap is a "long pause" if it exceeds long_pause_multiplier * median(gap).
+    long_pause_multiplier: 2.0
+    # Number of equal-width bins (over the group's own observed min/max interval)
+    # used for kit_pause_entropy's histogram.
+    entropy_bins: 10
+  burst:
+    # Consecutive keydowns with a gap below this threshold belong to the same burst.
+    gap_threshold_ms: 1000
+  mouse:
+    # mouse_path_length = total path length normalized to "distance per 100 keydowns",
+    # so it reflects movement intensity rather than raw session length.
+    path_length_per_keys: 100
+
+tier2:
+  text:
+    # Applied uniformly before ttr / hapax_ratio / word_entropy so word identity
+    # doesn't depend on case or punctuation attachment (e.g. "code." vs "code").
+    lowercase: true
+    strip_punctuation: true
+  indentation:
+    # Canonical single-character unit substituted for one indent LEVEL when
+    # normalizing code prior to any character-count feature. The specific
+    # character doesn't matter (only counts are compared) but must be a single
+    # char so 1 level == 1 char.
+    canonical_unit: "\t"
+
+tier3: {}

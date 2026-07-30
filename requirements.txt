@@ -1,0 +1,5 @@
+numpy>=1.26
+pandas>=2.0
+PyYAML>=6.0
+nltk>=3.9
+pytest>=7.4
