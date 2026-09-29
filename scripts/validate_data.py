@@ -13,25 +13,39 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.loader import RESPONSE_FIELD_MAP, SESSIONS  # noqa: E402
+from src.loader import RESPONSE_FIELD_MAP, SESSION_FOLDERS, SESSIONS  # noqa: E402
 
 REQUIRED_EVENT_KEYS = {"s_n", "r_t", "q_id", "version", "event_type", "data", "timestamp"}
 REQUIRED_KEY_DATA_KEYS = {"key", "code", "key_event_phase", "repeat", "line", "ch"}
 REQUIRED_MOUSE_DATA_KEYS = {"x", "y"}
 REQUIRED_CURSOR_DATA_KEYS = {"line", "ch"}
+# Session-level browser/viewport metadata, not tied to any (q_id, r_t,
+# version) question -- q_id/version are legitimately null on these events.
+# Not part of the key/mouse/cursor keystroke schema, so it's reported as a
+# per-session summary count rather than a schema issue.
+REQUIRED_ENVIRONMENT_CHANGE_DATA_KEYS = {"viewportWidth", "viewportHeight", "devicePixelRatio", "viewportScale"}
+
+REQUIRED_DATA_KEYS_BY_EVENT_TYPE = {
+    "key": REQUIRED_KEY_DATA_KEYS,
+    "mouse": REQUIRED_MOUSE_DATA_KEYS,
+    "cursor": REQUIRED_CURSOR_DATA_KEYS,
+    "environment_change": REQUIRED_ENVIRONMENT_CHANGE_DATA_KEYS,
+}
 
 
-def _check_keystrokes_file(path: Path) -> list[str]:
-    problems = []
+def _check_keystrokes_file(path: Path) -> tuple[list[str], Counter]:
+    """Returns (schema problems, count of events by event_type)."""
+    problems: list[str] = []
+    event_type_counts: Counter = Counter()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        return [f"{path}: could not parse JSON ({exc})"]
+        return [f"{path}: could not parse JSON ({exc})"], event_type_counts
 
     if "keystrokes" not in raw:
         problems.append(f"{path}: missing top-level 'keystrokes' key")
@@ -45,18 +59,15 @@ def _check_keystrokes_file(path: Path) -> list[str]:
             continue
         data = ev.get("data") or {}
         et = ev.get("event_type")
-        if et == "key":
-            missing_data = REQUIRED_KEY_DATA_KEYS - set(data)
-        elif et == "mouse":
-            missing_data = REQUIRED_MOUSE_DATA_KEYS - set(data)
-        elif et == "cursor":
-            missing_data = REQUIRED_CURSOR_DATA_KEYS - set(data)
-        else:
+        event_type_counts[et] += 1
+        required_data_keys = REQUIRED_DATA_KEYS_BY_EVENT_TYPE.get(et)
+        if required_data_keys is None:
             problems.append(f"{path}: event {i} has unrecognized event_type={et!r}")
             continue
+        missing_data = required_data_keys - set(data)
         if missing_data:
             problems.append(f"{path}: event {i} (event_type={et}) missing data keys {sorted(missing_data)}")
-    return problems
+    return problems, event_type_counts
 
 
 def _check_responses_file(path: Path) -> list[str]:
@@ -99,11 +110,13 @@ def main(argv: list[str] | None = None) -> int:
 
     coverage: dict[str, dict[int, str]] = defaultdict(dict)
     all_problems: list[str] = []
+    environment_change_counts: dict[str, dict[int, int]] = defaultdict(dict)
 
     for user_dir in user_dirs:
         for session in SESSIONS:
-            k_path = user_dir / f"s{session}_keystrokes.json"
-            r_path = user_dir / f"s{session}_responses.json"
+            session_dir = user_dir / SESSION_FOLDERS[session]
+            k_path = session_dir / f"s{session}_keystrokes.json"
+            r_path = session_dir / f"s{session}_responses.json"
             k_exists, r_exists = k_path.exists(), r_path.exists()
             if not k_exists and not r_exists:
                 coverage[user_dir.name][session] = "absent"
@@ -115,7 +128,13 @@ def main(argv: list[str] | None = None) -> int:
                 coverage[user_dir.name][session] = "missing responses"
                 continue
 
-            problems = _check_keystrokes_file(k_path) + _check_responses_file(r_path)
+            k_problems, event_type_counts = _check_keystrokes_file(k_path)
+            problems = k_problems + _check_responses_file(r_path)
+
+            env_count = event_type_counts.get("environment_change", 0)
+            if env_count:
+                environment_change_counts[user_dir.name][session] = env_count
+
             if problems:
                 coverage[user_dir.name][session] = f"{len(problems)} issue(s)"
                 all_problems.extend(problems)
@@ -136,6 +155,19 @@ def main(argv: list[str] | None = None) -> int:
     total_ok = sum(1 for sessions in coverage.values() for v in sessions.values() if v == "ok")
     print()
     print(f"Sessions OK: {total_ok}/{total_expected}")
+
+    if environment_change_counts:
+        total_env_events = sum(c for sessions in environment_change_counts.values() for c in sessions.values())
+        sessions_with_env = sum(len(sessions) for sessions in environment_change_counts.values())
+        print()
+        print(
+            f"environment_change events: {total_env_events} across {sessions_with_env} session(s) "
+            f"(known event type -- viewport/device metadata, not part of the key/mouse/cursor "
+            f"schema, not a data issue):"
+        )
+        for user in sorted(environment_change_counts):
+            for session in sorted(environment_change_counts[user]):
+                print(f"  - {user} s{session}: {environment_change_counts[user][session]} event(s)")
 
     if all_problems:
         print()

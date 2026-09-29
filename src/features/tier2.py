@@ -20,6 +20,7 @@ import builtins as builtins_module
 import keyword
 import logging
 import math
+import re
 import string
 import tokenize
 from collections import Counter
@@ -127,6 +128,110 @@ def identifier_reuse_hapax(group: Group, config: dict) -> float:
     return hapax / len(counts)
 
 
+# --------------------------------------------------------------------------
+# Question-prompt boilerplate identifiers
+# --------------------------------------------------------------------------
+# scripts/investigate.py's Q3 found tier2_code_* identifier features are
+# substantially measuring the provided prototype: shared-identifier
+# occurrence runs 14%-97% of a solution's tokens (most questions 30%-70%).
+#
+# Deliberately NOT stripped by "identifiers appearing in >=90% of
+# participants" -- that statistical filter is circular. If AI-assisted code
+# converges on similar identifier names across participants, that
+# convergence is exactly the signal this project wants identifier_diversity
+# to detect, and a cross-participant-frequency filter would delete it before
+# it's ever measured.
+#
+# Instead the boilerplate set is derived from the QUESTION TEXT itself, which
+# explicitly names the identifiers a correct solution is required to use
+# (e.g. "Define deposit_money(current_balance, transaction_amount)...",
+# "<strong>main()</strong>"). This only removes identifiers the prompt
+# assigned, never identifiers participants happened to converge on
+# independently.
+
+_SNAKE_CASE_TOKEN_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+_CALL_LIKE_TOKEN_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_ASSIGNMENT_LINE_RE = re.compile(r"^\s*(?:\d+\.\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)")
+
+_question_boilerplate_cache: dict[tuple[int, int], frozenset[str]] = {}
+
+
+def _extract_question_boilerplate_identifiers(prompt: str) -> frozenset[str]:
+    """Identifier-shaped tokens the raw prompt text explicitly names, via
+    three simple, auditable signals (HTML tags and all -- no need to strip
+    them, they don't look like identifiers):
+
+      1. snake_case tokens (>=1 underscore): virtually never occurs in
+         ordinary English prose, so this is a low-false-positive way to catch
+         names like "triangle_base" or "transaction_amount" wherever they
+         appear in the prompt, tagged or not.
+      2. a bare word immediately followed by "(": catches required function
+         names however they're introduced, e.g. "<strong>main()</strong>" or
+         "function called multiply_list(nums)".
+      3. the left-hand side of a literal assignment line given as starter
+         code, e.g. "starting_balance = 1000" or "2. width = 5".
+
+    Reserved words and builtins are dropped -- rule 2 would otherwise catch
+    the prompt's own mentions of print()/input().
+    """
+    found: set[str] = set()
+    found.update(_SNAKE_CASE_TOKEN_RE.findall(prompt))
+    found.update(m.group(1) for m in _CALL_LIKE_TOKEN_RE.finditer(prompt))
+    for line in prompt.splitlines():
+        m = _ASSIGNMENT_LINE_RE.match(line)
+        if m:
+            found.add(m.group(1))
+    found -= RESERVED_WORDS
+    found -= BUILTIN_NAMES
+    return frozenset(found)
+
+
+def _question_boilerplate_identifiers(session: int, q_id: int, prompt: str | None) -> frozenset[str]:
+    """Cached per (session, q_id) -- q_id alone is not unique across sessions
+    (sessions 1 and 2 share the same six prompts; sessions 3-5 each have
+    their own), so both are needed to key the cache correctly."""
+    key = (session, q_id)
+    cached = _question_boilerplate_cache.get(key)
+    if cached is not None:
+        return cached
+    result = _extract_question_boilerplate_identifiers(prompt or "")
+    if prompt:
+        _question_boilerplate_cache[key] = result
+    return result
+
+
+def identifier_diversity_no_boilerplate(group: Group, config: dict) -> float:
+    """identifier_diversity, excluding identifiers the question prompt
+    itself required (see the "Question-prompt boilerplate identifiers"
+    section above). Emitted side-by-side with identifier_diversity rather
+    than replacing it, so the two can be compared instead of committing
+    blindly to one.
+    """
+    tokens = tokenize_code(group.text or "")
+    if tokens is None:
+        return math.nan
+    boilerplate = _question_boilerplate_identifiers(group.session, group.q_id, group.prompt)
+    idents = [i for i in _identifiers(tokens) if i not in boilerplate]
+    if not idents:
+        return math.nan
+    return len(set(idents)) / len(idents)
+
+
+def identifier_reuse_hapax_no_boilerplate(group: Group, config: dict) -> float:
+    """identifier_reuse_hapax, excluding question-prompt boilerplate
+    identifiers (see identifier_diversity_no_boilerplate)."""
+    tokens = tokenize_code(group.text or "")
+    if tokens is None:
+        return math.nan
+    boilerplate = _question_boilerplate_identifiers(group.session, group.q_id, group.prompt)
+    idents = [i for i in _identifiers(tokens) if i not in boilerplate]
+    if not idents:
+        return math.nan
+    counts = Counter(idents)
+    hapax = sum(1 for c in counts.values() if c == 1)
+    return hapax / len(counts)
+
+
 def token_entropy(group: Group, config: dict) -> float:
     tokens = tokenize_code(group.text or "")
     if tokens is None:
@@ -169,7 +274,9 @@ def function_call_density(group: Group, config: dict) -> float:
 
 CODE_FEATURES: dict[str, callable] = {
     "identifier_diversity": identifier_diversity,
+    "identifier_diversity_no_boilerplate": identifier_diversity_no_boilerplate,
     "identifier_reuse_hapax": identifier_reuse_hapax,
+    "identifier_reuse_hapax_no_boilerplate": identifier_reuse_hapax_no_boilerplate,
     "token_entropy": token_entropy,
     "comment_density": comment_density,
     "control_flow_keyword_ratio": control_flow_keyword_ratio,

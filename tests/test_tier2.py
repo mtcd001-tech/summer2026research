@@ -57,6 +57,87 @@ def test_identifier_reuse_hapax():
     assert tier2.identifier_reuse_hapax(_code_group(IDENTIFIER_SNIPPET), CONFIG) == pytest.approx(1 / 3)
 
 
+# ---------------------------------------------------------------------------
+# Question-prompt boilerplate identifiers (scripts/investigate.py Q3)
+# ---------------------------------------------------------------------------
+
+def test_extract_question_boilerplate_identifiers_snake_case():
+    prompt = "Use descriptive variable names, such as triangle_base and triangle_height."
+    assert tier2._extract_question_boilerplate_identifiers(prompt) == frozenset({"triangle_base", "triangle_height"})
+
+
+def test_extract_question_boilerplate_identifiers_call_like():
+    prompt = "Define a Python function called <strong>greet()</strong> that prints a message."
+    assert tier2._extract_question_boilerplate_identifiers(prompt) == frozenset({"greet"})
+
+
+def test_extract_question_boilerplate_identifiers_assignment_line():
+    prompt = "Use this starting data:\n\n\tstarting_balance = 1000\n\ttransaction_list = [1, 2]\n"
+    idents = tier2._extract_question_boilerplate_identifiers(prompt)
+    assert idents == frozenset({"starting_balance", "transaction_list"})
+
+
+def test_extract_question_boilerplate_identifiers_excludes_builtins_and_reserved_words():
+    # "print(" / "input(" are call-like but must not be treated as
+    # question-required identifiers -- they're Python builtins mentioned in
+    # the prompt's own instructions, not names the student must define.
+    prompt = "Do not use the input() function. Use the print() function to display results."
+    assert tier2._extract_question_boilerplate_identifiers(prompt) == frozenset()
+
+
+def test_extract_question_boilerplate_identifiers_ignores_plain_prose():
+    prompt = "Write a Python program that uses a for loop to calculate the sum of odd numbers."
+    assert tier2._extract_question_boilerplate_identifiers(prompt) == frozenset()
+
+
+def test_question_boilerplate_identifiers_cached_per_session_and_qid():
+    # Same q_id, different session, different prompt text -> must not share
+    # a cache entry keyed on q_id alone.
+    tier2._question_boilerplate_cache.clear()
+    a = tier2._question_boilerplate_identifiers(1, 1, "uses triangle_base only")
+    b = tier2._question_boilerplate_identifiers(2, 1, "uses starting_balance only")
+    assert a == frozenset({"triangle_base"})
+    assert b == frozenset({"starting_balance"})
+
+
+def test_identifier_diversity_no_boilerplate_excludes_question_identifiers():
+    tier2._question_boilerplate_cache.clear()
+    # code uses two "real" identifiers (a, b) plus the boilerplate name
+    # required by the prompt (triangle_base); only a/b should count.
+    code = "triangle_base = 1\na = triangle_base\nb = a\n"
+    prompt = "Define a variable named triangle_base."
+    group = make_group(r_t="code", text=code, prompt=prompt, session=1, q_id=2)
+
+    with_boilerplate = tier2.identifier_diversity(group, CONFIG)
+    without_boilerplate = tier2.identifier_diversity_no_boilerplate(group, CONFIG)
+
+    # idents (incl. boilerplate): triangle_base, triangle_base, a, a, b -> 5 total, 3 unique -> 0.6
+    assert with_boilerplate == pytest.approx(0.6)
+    # idents excluding triangle_base: a, a, b -> 3 total, 2 unique -> 2/3
+    assert without_boilerplate == pytest.approx(2 / 3)
+    assert without_boilerplate != with_boilerplate
+
+
+def test_identifier_reuse_hapax_no_boilerplate_excludes_question_identifiers():
+    tier2._question_boilerplate_cache.clear()
+    code = "triangle_base = 1\na = triangle_base\nb = a\n"
+    prompt = "Define a variable named triangle_base."
+    group = make_group(r_t="code", text=code, prompt=prompt, session=1, q_id=3)
+
+    # idents excluding triangle_base: a(x2), b(x1) -> counts {a:2, b:1} -> hapax=1/2
+    assert tier2.identifier_reuse_hapax_no_boilerplate(group, CONFIG) == pytest.approx(0.5)
+
+
+def test_no_boilerplate_variants_degrade_to_nan_when_everything_is_boilerplate():
+    tier2._question_boilerplate_cache.clear()
+    code = "triangle_base = 1\n"
+    prompt = "Define a variable named triangle_base."
+    group = make_group(r_t="code", text=code, prompt=prompt, session=1, q_id=4)
+
+    assert math.isnan(tier2.identifier_diversity_no_boilerplate(group, CONFIG))
+    assert math.isnan(tier2.identifier_reuse_hapax_no_boilerplate(group, CONFIG))
+
+
 # tokenize("a a b") -> content tokens NAME 'a','a','b' (NEWLINE/ENDMARKER excluded)
 # freq: a:2, b:1 out of 3 -> entropy = -(2/3 log2 2/3 + 1/3 log2 1/3) ~= 0.918296
 

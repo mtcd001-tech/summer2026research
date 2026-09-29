@@ -7,12 +7,16 @@ import logging
 
 import pytest
 
-from src.loader import DatasetError, discover_sessions, load_user_session
+from src.loader import DatasetError, SESSION_FOLDERS, discover_sessions, load_user_session
 
 
 def _write_json(path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+def _session_path(user_dir, session, filename):
+    return user_dir / SESSION_FOLDERS[session] / filename
 
 
 def test_discover_sessions_raises_on_missing_root(tmp_path):
@@ -27,16 +31,16 @@ def test_discover_sessions_raises_on_empty_root(tmp_path):
 
 def test_discover_sessions_raises_when_no_complete_pairs(tmp_path):
     # a user dir exists but only has a keystrokes file, no responses file
-    _write_json(tmp_path / "u1" / "s1_keystrokes.json", {"keystrokes": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_keystrokes.json"), {"keystrokes": [], "questions": {}})
     with pytest.raises(DatasetError):
         discover_sessions(tmp_path)
 
 
 def test_discover_sessions_finds_complete_pairs(tmp_path):
-    _write_json(tmp_path / "u1" / "s1_keystrokes.json", {"keystrokes": [], "questions": {}})
-    _write_json(tmp_path / "u1" / "s1_responses.json", {"responses": [], "questions": {}})
-    _write_json(tmp_path / "u2" / "s2_keystrokes.json", {"keystrokes": [], "questions": {}})
-    _write_json(tmp_path / "u2" / "s2_responses.json", {"responses": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_keystrokes.json"), {"keystrokes": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_responses.json"), {"responses": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u2", 2, "s2_keystrokes.json"), {"keystrokes": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u2", 2, "s2_responses.json"), {"responses": [], "questions": {}})
     pairs = discover_sessions(tmp_path)
     assert pairs == [("u1", 1), ("u2", 2)]
 
@@ -55,14 +59,14 @@ def _sample_event(q_id=1, r_t="code", version=1, event_type="key", data=None, ti
 
 def test_load_user_session_session1_fields(tmp_path):
     _write_json(
-        tmp_path / "u1" / "s1_keystrokes.json",
+        _session_path(tmp_path / "u1", 1, "s1_keystrokes.json"),
         {
             "keystrokes": [_sample_event(data={"key": "a", "code": "KeyA", "key_event_phase": "keydown", "repeat": False, "line": 0, "ch": 1})],
             "questions": {"1": "prompt text"},
         },
     )
     _write_json(
-        tmp_path / "u1" / "s1_responses.json",
+        _session_path(tmp_path / "u1", 1, "s1_responses.json"),
         {
             "responses": [{"session": 1, "question": 1, "q_id": 1, "code": "print(1)", "explanation": "it prints"}],
             "questions": {"1": "prompt text"},
@@ -77,9 +81,9 @@ def test_load_user_session_session1_fields(tmp_path):
 
 
 def test_load_user_session_session2_transcribe_fields(tmp_path):
-    _write_json(tmp_path / "u1" / "s2_keystrokes.json", {"keystrokes": [], "questions": {"1": "prompt"}})
+    _write_json(_session_path(tmp_path / "u1", 2, "s2_keystrokes.json"), {"keystrokes": [], "questions": {"1": "prompt"}})
     _write_json(
-        tmp_path / "u1" / "s2_responses.json",
+        _session_path(tmp_path / "u1", 2, "s2_responses.json"),
         {
             "responses": [
                 {
@@ -102,9 +106,9 @@ def test_load_user_session_session2_transcribe_fields(tmp_path):
 
 
 def test_load_user_session_session3_mimicry_fields(tmp_path):
-    _write_json(tmp_path / "u1" / "s3_keystrokes.json", {"keystrokes": [], "questions": {"1": "prompt"}})
+    _write_json(_session_path(tmp_path / "u1", 3, "s3_keystrokes.json"), {"keystrokes": [], "questions": {"1": "prompt"}})
     _write_json(
-        tmp_path / "u1" / "s3_responses.json",
+        _session_path(tmp_path / "u1", 3, "s3_responses.json"),
         {
             "responses": [
                 {
@@ -126,7 +130,7 @@ def test_load_user_session_session3_mimicry_fields(tmp_path):
 
 def test_malformed_event_is_skipped_and_logged(tmp_path, caplog):
     _write_json(
-        tmp_path / "u1" / "s1_keystrokes.json",
+        _session_path(tmp_path / "u1", 1, "s1_keystrokes.json"),
         {
             "keystrokes": [
                 {"s_n": 1, "r_t": "code"},  # missing required keys
@@ -135,17 +139,45 @@ def test_malformed_event_is_skipped_and_logged(tmp_path, caplog):
             "questions": {},
         },
     )
-    _write_json(tmp_path / "u1" / "s1_responses.json", {"responses": [], "questions": {}})
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_responses.json"), {"responses": [], "questions": {}})
     with caplog.at_level(logging.WARNING):
         data = load_user_session(tmp_path, "u1", 1)
     assert len(data.events) == 1  # malformed event skipped, valid one kept
     assert any("malformed event" in rec.message for rec in caplog.records)
 
 
-def test_unrecognized_response_field_is_dropped_and_logged(tmp_path, caplog):
-    _write_json(tmp_path / "u1" / "s1_keystrokes.json", {"keystrokes": [], "questions": {}})
+def test_environment_change_events_are_dropped_without_malformed_warning(tmp_path, caplog):
     _write_json(
-        tmp_path / "u1" / "s1_responses.json",
+        _session_path(tmp_path / "u1", 1, "s1_keystrokes.json"),
+        {
+            "keystrokes": [
+                {
+                    "s_n": 1, "r_t": "environment", "q_id": None, "version": None,
+                    "event_type": "environment_change",
+                    "data": {"viewportWidth": 1280, "viewportHeight": 720, "devicePixelRatio": 1.5, "viewportScale": 1},
+                    "timestamp": 0,
+                },
+                _sample_event(data={"key": "a", "code": "KeyA", "key_event_phase": "keydown", "repeat": False, "line": 0, "ch": 1}),
+            ],
+            "questions": {},
+        },
+    )
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_responses.json"), {"responses": [], "questions": {}})
+    with caplog.at_level(logging.INFO):
+        data = load_user_session(tmp_path, "u1", 1)
+    # the environment_change event is dropped (never becomes an Event, so it
+    # can't inflate any key/mouse/cursor count), but NOT reported the way a
+    # genuinely malformed event is.
+    assert len(data.events) == 1
+    assert data.events[0].event_type == "key"
+    assert not any("malformed event" in rec.message for rec in caplog.records)
+    assert any("environment_change" in rec.message and "skipped" in rec.message for rec in caplog.records)
+
+
+def test_unrecognized_response_field_is_dropped_and_logged(tmp_path, caplog):
+    _write_json(_session_path(tmp_path / "u1", 1, "s1_keystrokes.json"), {"keystrokes": [], "questions": {}})
+    _write_json(
+        _session_path(tmp_path / "u1", 1, "s1_responses.json"),
         {"responses": [{"session": 1, "q_id": 1, "totally_unknown_field": "some text"}], "questions": {}},
     )
     with caplog.at_level(logging.WARNING):

@@ -25,6 +25,19 @@ tier1:
     # mouse_path_length = total path length normalized to "distance per 100 keydowns",
     # so it reflects movement intensity rather than raw session length.
     path_length_per_keys: 100
+  filtering:
+    # NOT an exclusion filter. Which groups get kept is now an explicit rule
+    # in src/extract.py (_is_human_typed): version 1 for sessions 2-5 is the
+    # ChatGPT paste box (confirmed by Ashley, who built the collection
+    # platform -- no human typing by construction) and is always dropped;
+    # version 2 for sessions 2-5 and version 1 for session 1 (bona fide) are
+    # always kept, regardless of how few keydowns they have.
+    #
+    # This is a secondary sanity check on top of that rule: a KEPT group
+    # with fewer keydowns than this is still included in the output, just
+    # logged separately as worth a second look (see extract_all's docstring
+    # in src/extract.py).
+    sanity_check_min_keydown_count: 100
 
 tier2:
   text:

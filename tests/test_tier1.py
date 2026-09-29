@@ -32,6 +32,22 @@ def _iki_group():
     return make_group(key_events=events)
 
 
+def test_keydown_count():
+    # 5 keydowns in _iki_group(); used by src/extract.py as a secondary
+    # sanity check on kept groups, not to decide what's kept -- that's
+    # _is_human_typed's explicit (session, version) rule.
+    assert tier1.keydown_count(_iki_group(), CONFIG) == 5
+
+
+def test_keydown_count_excludes_repeats_per_config():
+    events = [
+        key_event(ts=0, key="a", code="KeyA", phase="keydown", repeat=False),
+        key_event(ts=10, key="a", code="KeyA", phase="keydown", repeat=True),
+        key_event(ts=20, key="a", code="KeyA", phase="keydown", repeat=True),
+    ]
+    assert tier1.keydown_count(make_group(key_events=events), CONFIG) == 1
+
+
 def test_kit_cv():
     assert tier1.kit_cv(_iki_group(), CONFIG) == pytest.approx(1.0)
 

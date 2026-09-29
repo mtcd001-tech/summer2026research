@@ -1,17 +1,27 @@
-"""Run AFTER the dataset lands in data/raw/. Answers, empirically, the three
-open questions the extraction pipeline deliberately does NOT guess at:
+"""Run AFTER the dataset lands in data/raw/. Answers, empirically, three open
+questions the extraction pipeline used to not guess at (Q1-Q3), plus a Q4
+that reports (rather than decides) the resolution of Q3:
 
-  1. What does keystroke `version` (1 vs 2) correspond to among the response
-     fields (e.g. chatgptAnswer/retype for sessions 2/5)?
-  2. Does replaying keydown events (src.streams.reconstruct_text) reproduce
-     the stored response text, and how often?
-  3. What fraction of code tokens are boilerplate (identical prototype code
-     every participant is given for a question), and should tier2_code_*
-     features strip it before computing identifier_diversity etc.?
+  1. RESOLVED. What does keystroke `version` (1 vs 2) correspond to among the
+     response fields (e.g. chatgptAnswer/retype for sessions 2/5)? See
+     RESPONSE_FIELD_MAP's docstring in src/loader.py.
+  2. RESOLVED (known-broken). Does replaying keydown events
+     (src.streams.reconstruct_text) reproduce the stored response text? No --
+     0/2674 exact matches, median similarity 0.123. See reconstruct_text's
+     docstring in src/streams.py; it stays validation-only.
+  3. RESOLVED. What fraction of code tokens are boilerplate (identical
+     prototype code every participant is given for a question)? 14%-97%
+     depending on question. tier2_code_* now emits both the raw
+     identifier_diversity/identifier_reuse_hapax and a
+     *_no_boilerplate variant that excludes identifiers the QUESTION TEXT
+     itself names (see src/features/tier2.py) -- not a cross-participant
+     frequency filter, which would be circular.
+  4. What identifier set does Q3's resolution actually derive per question?
+     Printed here so it can be eyeballed against the real prompts.
 
-This script makes NO assumptions the extraction pipeline depends on -- it is
-purely diagnostic. Nothing here should be used to hardcode a mapping in
-src/loader.py until its output has actually been reviewed against real data.
+This script makes NO assumptions the extraction pipeline depends on beyond
+what's already resolved and implemented above -- it is diagnostic/auditing,
+not a place to hardcode new, unreviewed guesses.
 
 Usage:
     python scripts/investigate.py --data-root data/raw
@@ -197,13 +207,44 @@ def investigate_boilerplate(data_root: Path, thresholds=(0.9, 1.0)) -> None:
             )
 
     print(
-        "\nIf the >=90-100% band captures a large, consistent fraction of "
-        "occurrences across questions, tier2_code_* features (especially "
-        "identifier_diversity) should strip those identifiers -- or the "
-        "prototype's exact token span, if it can be recovered from the "
-        "question text -- before computing stylometric features, otherwise "
-        "diversity partly measures shared boilerplate rather than authored code."
+        "\nRESOLVED: this >=90% cross-participant-frequency band is large and "
+        "consistent enough that tier2_code_* identifier features are "
+        "substantially measuring the provided prototype -- but stripping BY "
+        "this statistical filter would be circular (AI-assisted convergence "
+        "on similar names is exactly the signal this project wants to "
+        "detect, and this filter would delete it). Instead,"
+        "src/features/tier2.py derives a fixed boilerplate set per question "
+        "from the QUESTION TEXT itself (identifiers the prompt explicitly "
+        "names) and emits identifier_diversity_no_boilerplate / "
+        "identifier_reuse_hapax_no_boilerplate alongside the unfiltered "
+        "originals. See investigate_question_boilerplate() below for the "
+        "extracted per-question set."
     )
+
+
+def investigate_question_boilerplate(data_root: Path) -> None:
+    """Prints the identifier set src/features/tier2.py's
+    _extract_question_boilerplate_identifiers derives from each question's
+    prompt text, for a human to eyeball against the actual prompts before
+    trusting identifier_diversity_no_boilerplate / identifier_reuse_hapax_no_boilerplate.
+    """
+    print("\n" + "=" * 78)
+    print("Q4: per-question boilerplate identifiers derived from prompt text")
+    print("=" * 78)
+
+    # Imported here, not at module level, so importing investigate.py for
+    # the other Q's doesn't require nltk (tier2 raises ImportError at import
+    # time if it's missing) unless this specific check is actually run.
+    from src.features.tier2 import _extract_question_boilerplate_identifiers
+
+    seen_prompts: dict[tuple[int, int], str] = {}
+    for session_data in iter_user_sessions(data_root):
+        for q_id, text in session_data.questions.items():
+            seen_prompts.setdefault((session_data.session, q_id), text)
+
+    for session, q_id in sorted(seen_prompts):
+        idents = sorted(_extract_question_boilerplate_identifiers(seen_prompts[(session, q_id)]))
+        print(f"  session={session} q_id={q_id}: {idents}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -214,6 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     investigate_version_mapping(args.data_root)
     investigate_reconstruction_agreement(args.data_root)
     investigate_boilerplate(args.data_root)
+    investigate_question_boilerplate(args.data_root)
     return 0
 
 

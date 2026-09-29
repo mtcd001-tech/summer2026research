@@ -1,4 +1,35 @@
-# Keystroke feature extraction (CS1 / LLM-assisted-coding detection)
+# Keystroke feature extraction (CS1 and CS2)
+
+## Shared five-scenario analysis
+
+Extract **both feature families** (existing behavioral/text features and
+Vietnamese-style per-key/bigram timings) for both cohorts:
+
+```powershell
+python scripts/extract_features.py
+```
+
+See [feature extraction commands and definitions](scripts/FEATURE_EXTRACTION.md).
+
+CS1 and CS2 now share `raw/<user>/<scenario>/sN_keystrokes.json` and
+`sN_responses.json`, with extracted tables in each cohort's
+`processed/features.csv`. Scenarios are **Bona fide, Transcription, Mimicry,
+Paraphrasing, Deception**. Legacy folder aliases remain readable.
+
+```powershell
+pip install -r requirements.txt -r requirements-modeling.txt
+python scripts/analysis/scenario_importance.py --extract
+```
+
+This generates MI and signed effect-size heatmaps (PNG/PDF) and full plotting
+tables for both datasets under `analysis/scenarios/`. See the
+[shared analysis guide](scripts/analysis/README.md) for methods, commands,
+data normalization, and limitations. Saved-model analysis is separately
+available in `scripts/analysis/feature_importance.py`.
+
+The original extraction design notes below describe the initial CS1 setup;
+their pre-data status and `data/raw` paths are historical. Use `dataCs1/raw`
+or `dataCs2/raw` with the extraction and validation commands.
 
 Extracts a tabular feature set (keystroke-timing, code/text stylometry,
 LLM-signature) from keystroke and response logs, for downstream MLP/SVM/

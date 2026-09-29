@@ -82,18 +82,31 @@ def build_groups(session_data: UserSessionData) -> dict[GroupKey, Group]:
 def reconstruct_text(key_events: list[Event]) -> str:
     """Best-effort replay of keydown events into a text buffer.
 
+    KNOWN BROKEN -- DO NOT USE AS A DATA SOURCE. Measured against real data
+    (scripts/investigate.py's Q2) across 2,674 groups: 0 exact matches, mean
+    similarity 0.307, median similarity 0.123 vs. the stored response text.
+    The likely cause is exactly the Enter-key split-point limitation
+    documented below, but the practical takeaway is simpler: this
+    reconstruction does not reproduce real responses closely enough to trust
+    for anything beyond the validation check it was built for.
+
+    This was always intended as validation-only, never as a feature input --
+    stored response text is the authoritative source for tier2/tier3
+    features (see the module docstring above) and stays that way. Nothing in
+    src/features/*.py or src/extract.py calls this function; only
+    scripts/investigate.py does, purely to measure the (poor) agreement rate.
+    Do not wire this into the extraction path.
+
     Interpretation: each key event's (line, ch) is the caret position AFTER
     the keystroke is applied. This is a heuristic, not a confirmed fact about
-    the logger -- scripts/investigate.py exists specifically to measure how
-    often this reconstruction agrees with the stored response text (open
-    question #2). It is not used anywhere in the feature-extraction path.
+    the logger.
 
     Known limitation: on "Enter", the post-keystroke caret (new_line, 0) does
     not tell us the column where the split happened on the previous line, so
     this implementation always splits at the END of the current line rather
     than at the true caret column. It will visibly diverge from ground truth
-    whenever Enter is pressed mid-line -- that divergence is exactly what
-    investigate.py's agreement-rate check is meant to surface and quantify.
+    whenever Enter is pressed mid-line -- that divergence is the leading
+    suspect for the near-zero agreement rate measured above.
     """
     lines: list[str] = [""]
 

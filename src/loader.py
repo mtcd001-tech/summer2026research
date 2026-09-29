@@ -10,20 +10,65 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+from src.scenarios import SCENARIOS, FOLDER_ALIASES
 
 logger = logging.getLogger(__name__)
 
 SESSIONS = (1, 2, 3, 4, 5)
 
+# Each session lives in its own condition-named subfolder under the user
+# folder (data/raw/<user>/<condition>/s{n}_keystrokes.json), rather than
+# flat in the user folder. The file names still carry the session number.
+SESSION_FOLDERS: dict[int, str] = SCENARIOS
+
+
+def _session_dir(user_dir: Path, session: int) -> Path:
+    existing = [user_dir / name for name in FOLDER_ALIASES[session]
+                if (user_dir / name).is_dir()]
+    if len(existing) > 1:
+        raise DatasetError(f"Ambiguous scenario folders in {user_dir}: {existing}")
+    if existing:
+        return existing[0]
+    return user_dir / SESSION_FOLDERS[session]
+
+
+# Event types that carry session-level metadata rather than a keystroke tied
+# to a (q_id, r_t, version) group -- e.g. "environment_change" reports
+# viewport/device info with q_id/version legitimately null. These are
+# recognized and dropped up front, not fed through the key/mouse/cursor
+# schema (build_groups only ever routes "key"/"mouse"/"cursor" into a group
+# anyway), and specifically not reported as "malformed" the way an event
+# with a genuinely missing/unparseable field would be.
+_UNGROUPED_EVENT_TYPES = {"environment_change"}
+
 # response-JSON field name -> (r_t, version) this text belongs to.
 #
-# This is a *best-effort, revisitable* mapping, not a confirmed fact. We know
-# from the schema which field names exist per session, but we do NOT yet know
-# (open question, see scripts/investigate.py) whether e.g. "chatgptAnswer"
-# lines up with keystroke version 1 or version 2, or represents typed
-# keystrokes at all. It lives here, as data, specifically so it can be
-# corrected in one place -- without touching feature code -- once
-# investigate.py reports back against real data.
+# CONFIRMED (2026-08) by Ashley, who built the collection platform: version 1
+# is always the ChatGPT copy-paste box (LLM output pasted in, no human typing
+# by construction); version 2 is the box the human actually typed/
+# transcribed/paraphrased into. Session 1 (bona fide) only ever has version 1,
+# and it IS human-generated there -- there is no AI box in the bona fide
+# condition, so "version 1" means something different in session 1 than it
+# does in sessions 2-5.
+#
+# This matches both scripts/investigate.py's Q1 correlation check (version 2
+# has ~400-650 mean keydowns and its length correlates ~0.9-0.98 with these
+# field's lengths; version 1 has ~2-9 mean keydowns -- a paste action, not
+# typing) AND a direct read of a real file: data/raw/User 1/Paraphrase/
+# s4_responses.json q_id=1 has code_version_1 using the prompt's own verbose
+# descriptive names ("student_name", "favorite_color", ...) while
+# code_version_2 uses genuinely different, shortened names and values
+# ("name"/"Red"/"Banh Mi" vs "student_name"/"Blue"/"Pho") -- exactly what a
+# human paraphrase produces, not what pasting the same LLM output twice
+# would. The matching keystroke counts for that file: version 1 = 2 keydowns
+# (paste), version 2 = 211 keydowns (real typing). The mapping below already
+# matched this once confirmed, so no values changed.
+#
+# src/extract.py keeps only (session=1, version=1) and (session 2-5,
+# version=2) groups -- an explicit rule now, not a keydown-count heuristic --
+# because version 1 for sessions 2-5 is defined to contain no human typing.
+# This mapping only needs to get the *label* (which r_t/version a field's
+# text belongs to) right; src/extract.py decides which groups are kept.
 RESPONSE_FIELD_MAP: dict[str, tuple[str, int]] = {
     # session 1
     "code": ("code", 1),
@@ -99,8 +144,9 @@ def discover_sessions(data_root: Path) -> list[tuple[str, int]]:
     pairs: list[tuple[str, int]] = []
     for user_dir in sorted(p for p in data_root.iterdir() if p.is_dir()):
         for session in SESSIONS:
-            k_path = user_dir / f"s{session}_keystrokes.json"
-            r_path = user_dir / f"s{session}_responses.json"
+            session_dir = _session_dir(user_dir, session)
+            k_path = session_dir / f"s{session}_keystrokes.json"
+            r_path = session_dir / f"s{session}_responses.json"
             if k_path.exists() and r_path.exists():
                 pairs.append((user_dir.name, session))
             elif k_path.exists() or r_path.exists():
@@ -138,7 +184,11 @@ def _normalize_questions(*raw_question_dicts: dict | None) -> dict[int, str]:
 
 def _normalize_events(user: str, session: int, raw_events: list[dict]) -> list[Event]:
     events: list[Event] = []
+    ungrouped_counts: dict[str, int] = {}
     for i, raw in enumerate(raw_events):
+        if raw.get("event_type") in _UNGROUPED_EVENT_TYPES:
+            ungrouped_counts[raw["event_type"]] = ungrouped_counts.get(raw["event_type"], 0) + 1
+            continue
         try:
             events.append(
                 Event(
@@ -160,6 +210,12 @@ def _normalize_events(user: str, session: int, raw_events: list[dict]) -> list[E
                 i,
                 exc,
             )
+    for event_type, count in ungrouped_counts.items():
+        logger.info(
+            "user=%s session=%s: skipped %d %s event(s) -- session-level metadata, "
+            "not tied to a question, not used by any feature",
+            user, session, count, event_type,
+        )
     return events
 
 
@@ -214,8 +270,9 @@ def _normalize_responses(user: str, session: int, raw_responses: list[dict]) -> 
 
 def load_user_session(data_root: Path, user: str, session: int) -> UserSessionData:
     user_dir = Path(data_root) / user
-    k_path = user_dir / f"s{session}_keystrokes.json"
-    r_path = user_dir / f"s{session}_responses.json"
+    session_dir = _session_dir(user_dir, session)
+    k_path = session_dir / f"s{session}_keystrokes.json"
+    r_path = session_dir / f"s{session}_responses.json"
 
     k_raw = _load_json(k_path)
     r_raw = _load_json(r_path)

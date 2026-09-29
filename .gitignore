@@ -10,3 +10,19 @@ __pycache__/
 # extraction output
 *.csv
 !tests/**/*.csv
+
+# Local participant data and generated analysis artifacts
+dataCs1/raw/
+dataCs2/raw/
+dataCs1/processed/
+dataCs2/processed/
+dataCs1/normalization_manifest.json
+dataCs2/normalization_manifest.json
+analysis/scenarios/
+analysis/scenario_run.log
+.test-tmp*/
+
+# Local environments, trained artifacts, and nested checkout
+.venv/
+runs/
+summer2026research/

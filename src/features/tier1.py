@@ -108,6 +108,20 @@ def _keydown_stream(group: Group, config: dict) -> list[dict]:
     return out
 
 
+def keydown_count(group: Group, config: dict) -> int:
+    """Number of (non-repeat, per config) keydown events in this group.
+
+    Public (unlike the other helpers here) because src/extract.py uses it as
+    a secondary sanity check on which groups it keeps. Which groups are kept
+    is an explicit rule (version 1 for sessions 2-5 is the ChatGPT paste box,
+    confirmed by Ashley who built the collection platform, and is always
+    dropped regardless of keydown count -- see RESPONSE_FIELD_MAP's
+    docstring in src/loader.py); this count is only used to flag KEPT groups
+    that are surprisingly short, not to decide what's kept.
+    """
+    return len(_keydown_stream(group, config))
+
+
 # --------------------------------------------------------------------------
 # Timing
 # --------------------------------------------------------------------------
