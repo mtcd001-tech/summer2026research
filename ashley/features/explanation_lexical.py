@@ -63,6 +63,7 @@ def letter_frequency_distribution(text: str) -> dict[str, float]:
 # I think this feature may have the same problem of some of these special characters 
 # being prompted by specific coding quetions-ex the arithmateic operators (%, /, //, +, -, *),  
 # the # for questions specifically asking for comments, etc
+#COuld still use it for transcription versus bonafide level
 def special_character_frequency_distribution(text: str) -> dict[str, float]:
     """Frequency of each special character divided by total characters."""
     total = len(text)
